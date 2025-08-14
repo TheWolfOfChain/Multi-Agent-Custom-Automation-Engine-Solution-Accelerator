@@ -330,10 +330,12 @@ const SettingsButton: React.FC<SettingsButtonProps> = ({
       } else if (result.raiError) {
         setError('❌ Content Safety Check Failed\n\nYour team configuration contains content that doesn\'t meet our safety guidelines. Please review and modify:\n\n• Agent instructions and descriptions\n• Task prompts and content\n• Team descriptions\n\nEnsure all content is appropriate, helpful, and follows ethical AI principles.');
         setUploadMessage(null);
-      } else if (result.modelError) {
-        setError('🤖 Model Deployment Validation Failed\n\nYour team configuration references models that are not properly deployed:\n\n• Verify deployment_name values are correct\n• Ensure all models are deployed in Azure AI Foundry\n• Check model deployment names match exactly\n• Confirm access permissions to AI services\n\nAll agents require valid deployment_name for model access.');
-        setUploadMessage(null);
-      } else if (result.searchError) {
+      }
+      // } else if (result.modelError) {
+      //   setError('🤖 Model Deployment Validation Failed\n\nYour team configuration references models that are not properly deployed:\n\n• Verify deployment_name values are correct\n• Ensure all models are deployed in Azure AI Foundry\n• Check model deployment names match exactly\n• Confirm access permissions to AI services\n\nAll agents require valid deployment_name for model access.');
+      //   setUploadMessage(null);
+      // } 
+      else if (result.searchError) {
         setError('🔍 RAG Search Configuration Error\n\nYour team configuration includes RAG/search agents but has search index issues:\n\n• Verify search index names are correct\n• Ensure indexes exist in Azure AI Search\n• Check access permissions to search service\n• Confirm RAG agent configurations\n\nRAG agents require properly configured search indexes to function correctly.');
         setUploadMessage(null);
       } else {
