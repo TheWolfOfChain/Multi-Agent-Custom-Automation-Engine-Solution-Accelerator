@@ -4,10 +4,8 @@ import os
 from typing import Optional
 
 from azure.ai.projects.aio import AIProjectClient
-from azure.cosmos.aio import CosmosClient
-from helpers.azure_credential_utils import get_azure_credential
+from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
 from dotenv import load_dotenv
-from semantic_kernel.kernel import Kernel
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,6 +16,7 @@ class AppConfig:
 
     def __init__(self):
         """Initialize the application configuration with environment variables."""
+        self.logger = logging.getLogger(__name__)
         # Azure authentication settings
         self.AZURE_TENANT_ID = self._get_optional("AZURE_TENANT_ID")
         self.AZURE_CLIENT_ID = self._get_optional("AZURE_CLIENT_ID")
@@ -28,6 +27,18 @@ class AppConfig:
         self.COSMOSDB_DATABASE = self._get_optional("COSMOSDB_DATABASE")
         self.COSMOSDB_CONTAINER = self._get_optional("COSMOSDB_CONTAINER")
 
+        self.APPLICATIONINSIGHTS_CONNECTION_STRING = self._get_required(
+            "APPLICATIONINSIGHTS_CONNECTION_STRING"
+        )
+        self.APP_ENV = self._get_required("APP_ENV", "prod")
+        self.AZURE_AI_MODEL_DEPLOYMENT_NAME = self._get_required(
+            "AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o"
+        )
+
+        self.AZURE_COGNITIVE_SERVICES = self._get_optional(
+            "AZURE_COGNITIVE_SERVICES", "https://cognitiveservices.azure.com/.default"
+        )
+
         # Azure OpenAI settings
         self.AZURE_OPENAI_DEPLOYMENT_NAME = self._get_required(
             "AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"
@@ -36,9 +47,10 @@ class AppConfig:
             "AZURE_OPENAI_API_VERSION", "2024-11-20"
         )
         self.AZURE_OPENAI_ENDPOINT = self._get_required("AZURE_OPENAI_ENDPOINT")
-        self.AZURE_OPENAI_SCOPES = [
-            f"{self._get_optional('AZURE_OPENAI_SCOPE', 'https://cognitiveservices.azure.com/.default')}"
-        ]
+        self.REASONING_MODEL_NAME = self._get_optional("REASONING_MODEL_NAME", "o3")
+        self.AZURE_BING_CONNECTION_NAME = self._get_optional(
+            "AZURE_BING_CONNECTION_NAME"
+        )
 
         # Frontend settings
         self.FRONTEND_SITE_NAME = self._get_optional(
@@ -50,12 +62,56 @@ class AppConfig:
         self.AZURE_AI_RESOURCE_GROUP = self._get_required("AZURE_AI_RESOURCE_GROUP")
         self.AZURE_AI_PROJECT_NAME = self._get_required("AZURE_AI_PROJECT_NAME")
         self.AZURE_AI_AGENT_ENDPOINT = self._get_required("AZURE_AI_AGENT_ENDPOINT")
+        self.AZURE_AI_PROJECT_ENDPOINT = self._get_optional("AZURE_AI_PROJECT_ENDPOINT")
+
+        # Azure Search settings
+        self.AZURE_SEARCH_ENDPOINT = self._get_optional("AZURE_SEARCH_ENDPOINT")
+
+        # Optional MCP server endpoint (for local MCP server or remote)
+        # Example: http://127.0.0.1:8000/mcp
+        self.MCP_SERVER_ENDPOINT = self._get_optional("MCP_SERVER_ENDPOINT")
 
         # Cached clients and resources
         self._azure_credentials = None
         self._cosmos_client = None
         self._cosmos_database = None
         self._ai_project_client = None
+
+    def get_azure_credential(self, client_id=None):
+        """
+        Returns an Azure credential based on the application environment.
+
+        If the environment is 'dev', it uses DefaultAzureCredential.
+        Otherwise, it uses ManagedIdentityCredential.
+
+        Args:
+            client_id (str, optional): The client ID for the Managed Identity Credential.
+
+        Returns:
+            Credential object: Either DefaultAzureCredential or ManagedIdentityCredential.
+        """
+        if self.APP_ENV == "dev":
+            return (
+                DefaultAzureCredential()
+            )  # CodeQL [SM05139] Okay use of DefaultAzureCredential as it is only used in development
+        else:
+            return ManagedIdentityCredential(client_id=client_id)
+
+    def get_azure_credentials(self):
+        """Retrieve Azure credentials, either from environment variables or managed identity."""
+        if self._azure_credentials is None:
+            self._azure_credentials = self.get_azure_credential()
+        return self._azure_credentials
+
+    async def get_access_token(self) -> str:
+        """Get Azure access token for API calls."""
+        try:
+            credential = self.get_azure_credentials()
+            token = credential.get_token(self.AZURE_COGNITIVE_SERVICES)
+            return token.token
+        except Exception as e:
+            self.logger.error(f"Failed to get access token: {e}")
+            raise
 
     def _get_required(self, name: str, default: Optional[str] = None) -> str:
         """Get a required configuration value from environment variables.
@@ -106,42 +162,6 @@ class AppConfig:
         """
         return name in os.environ and os.environ[name].lower() in ["true", "1"]
 
-    def get_cosmos_database_client(self):
-        """Get a Cosmos DB client for the configured database.
-
-        Returns:
-            A Cosmos DB database client
-        """
-        try:
-            if self._cosmos_client is None:
-                self._cosmos_client = CosmosClient(
-                    self.COSMOSDB_ENDPOINT, credential=get_azure_credential()
-                )
-
-            if self._cosmos_database is None:
-                self._cosmos_database = self._cosmos_client.get_database_client(
-                    self.COSMOSDB_DATABASE
-                )
-
-            return self._cosmos_database
-        except Exception as exc:
-            logging.error(
-                "Failed to create CosmosDB client: %s. CosmosDB is required for this application.",
-                exc,
-            )
-            raise
-
-    def create_kernel(self):
-        """Creates a new Semantic Kernel instance.
-
-        Returns:
-            A new Semantic Kernel instance
-        """
-        # Create a new kernel instance without manually configuring OpenAI services
-        # The agents will be created using Azure AI Agent Project pattern instead
-        kernel = Kernel()
-        return kernel
-
     def get_ai_project_client(self):
         """Create and return an AIProjectClient for Azure AI Foundry using from_connection_string.
 
@@ -152,14 +172,16 @@ class AppConfig:
             return self._ai_project_client
 
         try:
-            credential = get_azure_credential()
+            credential = self.get_azure_credential()
             if credential is None:
                 raise RuntimeError(
                     "Unable to acquire Azure credentials; ensure Managed Identity is configured"
                 )
 
             endpoint = self.AZURE_AI_AGENT_ENDPOINT
-            self._ai_project_client = AIProjectClient(endpoint=endpoint, credential=credential)
+            self._ai_project_client = AIProjectClient(
+                endpoint=endpoint, credential=credential
+            )
 
             return self._ai_project_client
         except Exception as exc:

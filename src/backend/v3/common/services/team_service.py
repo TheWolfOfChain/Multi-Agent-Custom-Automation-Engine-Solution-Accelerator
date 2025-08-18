@@ -5,7 +5,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiohttp
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import (
     ClientAuthenticationError,
@@ -15,32 +14,30 @@ from azure.core.exceptions import (
 from azure.identity import DefaultAzureCredential
 from azure.search.documents.indexes import SearchIndexClient
 
-from models.messages_kernel import TeamConfiguration, TeamAgent, StartingTask
-from context.cosmos_memory_kernel import CosmosMemoryContext
-from helpers.azure_credential_utils import get_azure_credential
+from common.models.messages_kernel import (
+    TeamConfiguration,
+    TeamAgent,
+    StartingTask,
+)
 
 
-class JsonService:
+from common.config.app_config import config
+from common.database.database_base import DatabaseBase
+from v3.common.services.foundry_service import FoundryService
+
+
+class TeamService:
     """Service for handling JSON team configuration operations."""
 
-    def __init__(self, memory_context: Optional[CosmosMemoryContext] = None):
+    def __init__(self, memory_context: Optional[DatabaseBase] = None):
         """Initialize with optional memory context."""
         self.memory_context = memory_context
         self.logger = logging.getLogger(__name__)
 
         # Search validation configuration
-        self.search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT")
-        self.search_key = os.getenv("AZURE_SEARCH_KEY")
-        if self.search_key:
-            self.search_credential = AzureKeyCredential(self.search_key)
-        else:
-            self.search_credential = DefaultAzureCredential()
+        self.search_endpoint = config.AZURE_SEARCH_ENDPOINT
 
-        # Model validation configuration
-        self.subscription_id = os.getenv("AZURE_AI_SUBSCRIPTION_ID")
-        self.resource_group = os.getenv("AZURE_AI_RESOURCE_GROUP")
-        self.project_name = os.getenv("AZURE_AI_PROJECT_NAME")
-        self.project_endpoint = os.getenv("AZURE_AI_PROJECT_ENDPOINT")
+        self.search_credential = config.get_azure_credentials()
 
     async def validate_and_parse_team_config(
         self, json_data: Dict[str, Any], user_id: str
@@ -188,13 +185,13 @@ class JsonService:
             raise ValueError(f"Failed to save team configuration: {str(e)}") from e
 
     async def get_team_configuration(
-        self, config_id: str, user_id: str
+        self, team_id: str, user_id: str
     ) -> Optional[TeamConfiguration]:
         """
         Retrieve a team configuration by ID.
 
         Args:
-            config_id: Configuration ID to retrieve
+            team_id: Configuration ID to retrieve
             user_id: User ID for access control
 
         Returns:
@@ -202,7 +199,7 @@ class JsonService:
         """
         try:
             # Get the specific configuration using the team-specific method
-            team_config = await self.memory_context.get_team_by_id(config_id)
+            team_config = await self.memory_context.get_team_by_id(team_id)
 
             if team_config is None:
                 return None
@@ -211,7 +208,7 @@ class JsonService:
             if team_config.user_id != user_id:
                 self.logger.warning(
                     "Access denied: config %s does not belong to user %s",
-                    config_id,
+                    team_id,
                     user_id,
                 )
                 return None
@@ -243,12 +240,12 @@ class JsonService:
             self.logger.error("Error retrieving team configurations: %s", str(e))
             return []
 
-    async def delete_team_configuration(self, config_id: str, user_id: str) -> bool:
+    async def delete_team_configuration(self, team_id: str, user_id: str) -> bool:
         """
         Delete a team configuration by ID.
 
         Args:
-            config_id: Configuration ID to delete
+            team_id: Configuration ID to delete
             user_id: User ID for access control
 
         Returns:
@@ -256,96 +253,25 @@ class JsonService:
         """
         try:
             # First, verify the configuration exists and belongs to the user
-            team_config = await self.memory_context.get_team_by_id(config_id)
+            team_config = await self.memory_context.get_team_by_id(team_id)
 
             if team_config is None:
                 self.logger.warning(
-                    "Team configuration not found for deletion: %s", config_id
+                    "Team configuration not found for deletion: %s", team_id
                 )
                 return False
 
             # Delete the configuration using the specific delete_team_by_id method
-            success = await self.memory_context.delete_team_by_id(config_id)
+            success = await self.memory_context.delete_team_by_id(team_id)
 
             if success:
-                self.logger.info(
-                    "Successfully deleted team configuration: %s", config_id
-                )
+                self.logger.info("Successfully deleted team configuration: %s", team_id)
 
             return success
 
         except (KeyError, TypeError, ValueError) as e:
             self.logger.error("Error deleting team configuration: %s", str(e))
             return False
-
-    # -----------------------
-    # Model validation methods
-    # -----------------------
-
-    async def get_access_token(self) -> str:
-        """Get Azure access token for API calls."""
-        try:
-            credential = get_azure_credential()
-            token = credential.get_token("https://management.azure.com/.default")
-            return token.token
-        except Exception as e:
-            self.logger.error(f"Failed to get access token: {e}")
-            raise
-
-    async def list_model_deployments(self) -> List[Dict[str, Any]]:
-        """
-        List all model deployments in the Azure AI project using the REST API.
-        """
-        if not all([self.subscription_id, self.resource_group, self.project_name]):
-            self.logger.error("Azure AI project configuration is incomplete")
-            return []
-
-        try:
-            token = await self.get_access_token()
-
-            url = (
-                f"https://management.azure.com/subscriptions/{self.subscription_id}/"
-                f"resourceGroups/{self.resource_group}/providers/Microsoft.MachineLearningServices/"
-                f"workspaces/{self.project_name}/onlineEndpoints"
-            )
-
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-            params = {"api-version": "2024-10-01"}
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        deployments = data.get("value", [])
-                        deployment_info: List[Dict[str, Any]] = []
-                        for deployment in deployments:
-                            deployment_info.append(
-                                {
-                                    "name": deployment.get("name"),
-                                    "model": deployment.get("properties", {}).get(
-                                        "model", {}
-                                    ),
-                                    "status": deployment.get("properties", {}).get(
-                                        "provisioningState"
-                                    ),
-                                    "endpoint_uri": deployment.get(
-                                        "properties", {}
-                                    ).get("scoringUri"),
-                                }
-                            )
-                        return deployment_info
-                    else:
-                        error_text = await response.text()
-                        self.logger.error(
-                            f"Failed to list deployments. Status: {response.status}, Error: {error_text}"
-                        )
-                        return []
-        except Exception as e:
-            self.logger.error(f"Error listing model deployments: {e}")
-            return []
 
     def extract_models_from_agent(self, agent: Dict[str, Any]) -> set:
         """
@@ -406,7 +332,8 @@ class JsonService:
     ) -> Tuple[bool, List[str]]:
         """Validate that all models required by agents in the team config are deployed."""
         try:
-            deployments = await self.list_model_deployments()
+            foundry_service = FoundryService()
+            deployments = await foundry_service.list_model_deployments()
             available_models = [
                 d.get("name", "").lower()
                 for d in deployments
@@ -423,7 +350,7 @@ class JsonService:
             required_models.update(team_level_models)
 
             if not required_models:
-                default_model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
+                default_model = config.AZURE_OPENAI_DEPLOYMENT_NAME
                 required_models.add(default_model.lower())
 
             missing_models: List[str] = []
@@ -443,7 +370,8 @@ class JsonService:
     async def get_deployment_status_summary(self) -> Dict[str, Any]:
         """Get a summary of deployment status for debugging/monitoring."""
         try:
-            deployments = await self.list_model_deployments()
+            foundry_service = FoundryService()
+            deployments = await foundry_service.list_model_deployments()
             summary: Dict[str, Any] = {
                 "total_deployments": len(deployments),
                 "successful_deployments": [],

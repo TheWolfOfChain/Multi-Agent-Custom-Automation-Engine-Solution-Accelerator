@@ -9,14 +9,13 @@ import {
     Step,
     StepStatus,
     AgentType,
-    AgentTypeString,
     PlanMessage
 } from '../models';
 
 // Constants for endpoints
 const API_ENDPOINTS = {
     INPUT_TASK: '/input_task',
-    CREATE_PLAN: '/create_plan',
+    CREATE_PLAN: '/v3/create_plan',
     PLANS: '/plans',
     STEPS: '/steps',
     HUMAN_FEEDBACK: '/human_feedback',
@@ -128,7 +127,7 @@ export class APIService {
     async getPlans(sessionId?: string, useCache = true): Promise<PlanWithSteps[]> {
         const cacheKey = `plans_${sessionId || 'all'}`;
         const params = sessionId ? { session_id: sessionId } : {};
-
+        // TODO replace session for team_id 
         const fetcher = async () => {
             const data = await apiClient.get(API_ENDPOINTS.PLANS, { params });
             if (useCache) {
@@ -469,7 +468,7 @@ export class APIService {
      * @param agentType Agent type to filter by
      * @returns Array of steps for the specified agent
      */
-    getStepsForAgent(plan: PlanWithSteps, agentType: AgentTypeString): Step[] {
+    getStepsForAgent(plan: PlanWithSteps, agentType: AgentType): Step[] {
         return plan.steps.filter(step => step.agent === agentType);
     }
 
