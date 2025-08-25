@@ -191,6 +191,7 @@ async def input_task_endpoint(input_task: InputTask, request: Request):
         }
     authenticated_user = get_authenticated_user_details(request_headers=request.headers)
     user_id = authenticated_user["user_principal_id"]
+    print("Testing the changes")
 
     if not user_id:
         track_event_if_configured(
