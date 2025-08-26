@@ -25,7 +25,7 @@ param azureopenaiVersion string = '2025-01-01-preview'
   azd : {
     type: 'location'
     usageName : [
-      'OpenAI.GlobalStandard.gpt-4o, 50'
+      'OpenAI.GlobalStandard.gpt-4o, 150'
     ]
   }
 })
@@ -44,7 +44,7 @@ param gptModelVersion string = '2024-08-06'
 param modelDeploymentType string = 'GlobalStandard'
 
 @description('Optional. AI model deployment token capacity.')
-param gptModelCapacity int = 50
+param gptModelCapacity int = 150
 
 @description('Set the image tag for the container images used in the solution. Default is "latest".')
 param imageTag string = 'latest'

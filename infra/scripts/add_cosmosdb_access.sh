@@ -21,30 +21,14 @@ else
     echo "Not authenticated with Azure. Attempting to authenticate..."
 fi
 
-echo "Getting signed in user id"
-signed_user_id=$(az ad signed-in-user show --query id -o tsv)
 
 IFS=',' read -r -a principal_ids_array <<< $principal_ids
-
-# Check if signed-in user ID is already in the array
-found=false
-for principal_id in "${principal_ids_array[@]}"; do
-  if [ "$principal_id" == "$signed_user_id" ]; then
-    found=true
-    break
-  fi
-done
-
-if [ "$found" = false ]; then
-  principal_ids_array+=("$signed_user_id")
-fi
-
 
 echo "Assigning Cosmos DB Built-in Data Contributor role to users"
 for principal_id in "${principal_ids_array[@]}"; do
 
     # Check if the user has the Cosmos DB Built-in Data Contributor role
-    echo "Checking if user has the Cosmos DB Built-in Data Contributor role"
+    echo "Checking if user - ${principal_id} has the Cosmos DB Built-in Data Contributor role"
     roleExists=$(az cosmosdb sql role assignment list \
         --resource-group $resource_group \
         --account-name $account_name \
@@ -52,9 +36,9 @@ for principal_id in "${principal_ids_array[@]}"; do
 
     # Check if the role exists
     if [ -n "$roleExists" ]; then
-        echo "User already has the Cosmos DB Built-in Data Contributer role."
+        echo "User - ${principal_id} already has the Cosmos DB Built-in Data Contributer role."
     else
-        echo "User does not have the Cosmos DB Built-in Data Contributer role. Assigning the role."
+        echo "User - ${principal_id} does not have the Cosmos DB Built-in Data Contributer role. Assigning the role."
         MSYS_NO_PATHCONV=1 az cosmosdb sql role assignment create \
             --resource-group $resource_group \
             --account-name $account_name \

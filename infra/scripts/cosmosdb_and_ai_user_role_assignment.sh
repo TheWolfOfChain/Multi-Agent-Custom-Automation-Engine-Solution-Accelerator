@@ -8,6 +8,55 @@ resourceGroupName="$3"
 managedIdentityClientId="$4"
 aif_resource_id="${5}"
 
+# Function to merge and deduplicate principal IDs
+merge_principal_ids() {
+    local param_ids="$1"
+    local env_ids="$2"
+    local all_ids=""
+    
+    # Add parameter IDs if provided
+    if [ -n "$param_ids" ]; then
+        all_ids="$param_ids"
+    fi
+
+    signed_user_id=$(az ad signed-in-user show --query id -o tsv)
+
+    # Add environment variable IDs if provided
+    if [ -n "$env_ids" ]; then
+        if [ -n "$all_ids" ]; then
+            all_ids="$all_ids,$env_ids"
+        else
+            all_ids="$env_ids"
+        fi
+    fi
+    
+    all_ids="$all_ids,$signed_user_id"
+    # Remove duplicates and return
+    if [ -n "$all_ids" ]; then
+        # Convert to array, remove duplicates, and join back
+        IFS=',' read -r -a ids_array <<< "$all_ids"
+        declare -A unique_ids
+        for id in "${ids_array[@]}"; do
+            # Trim whitespace
+            id=$(echo "$id" | xargs)
+            if [ -n "$id" ]; then
+                unique_ids["$id"]=1
+            fi
+        done
+        
+        # Join unique IDs back with commas
+        local result=""
+        for id in "${!unique_ids[@]}"; do
+            if [ -n "$result" ]; then
+                result="$result,$id"
+            else
+                result="$id"
+            fi
+        done
+        echo "$result"
+    fi
+}
+
 
 # get parameters from azd env, if not provided
 if [ -z "$resourceGroupName" ]; then
@@ -23,12 +72,18 @@ if [ -z "$aif_resource_id" ]; then
 fi
 
 azSubscriptionId=$(azd env get-value AZURE_SUBSCRIPTION_ID)
+env_principal_ids=$(azd env get-value PRINCIPAL_IDS)
+
+# Merge principal IDs from parameter and environment variable
+principal_ids=$(merge_principal_ids "$principal_ids_param" "$env_principal_ids")
 
 # Check if all required arguments are provided
-if [ -z "$cosmosDbAccountName" ] || [ -z "$resourceGroupName" ] || [ -z "$aif_resource_id" ] ; then
-    echo "Usage: $0 <cosmosDbAccountName> <resourceGroupName> <managedIdentityClientId> <aif_resource_id>"
+if [ -z "$principal_ids" ] || [ -z "$cosmosDbAccountName" ] || [ -z "$resourceGroupName" ] || [ -z "$aif_resource_id" ] ; then
+    echo "Usage: $0 <principal_ids> <cosmosDbAccountName> <resourceGroupName> <managedIdentityClientId> <aif_resource_id>"
     exit 1
 fi
+
+echo "Using principal IDs: $principal_ids"
 
 # Authenticate with Azure
 if az account show &> /dev/null; then
